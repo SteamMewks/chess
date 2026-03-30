@@ -916,16 +916,20 @@ function makeBlackOpeningMove() {
   const move = currentOpening[openingStep];
   const piece = board[move.from[1]][move.from[0]];
 
-  // 黒の手じゃない → スキップだけ（終了しない）
+  // 黒駒がいない場合 → オープニングキャンセルして通常AIに切り替え
   if (!piece || piece[0] !== "b") {
-    openingStep++;
-    return false; // ←ここが超重要！！
+    console.log("Opening move invalid or disrupted, switching to normal AI");
+    currentOpening = null;   // オープニング終了
+    return false;
   }
 
   clickCell(move.from[0], move.from[1]);
   clickCell(move.to[0], move.to[1]);
 
   openingStep++;
+  // オープニング完了したら currentOpening を null にする
+  if (openingStep >= currentOpening.length) currentOpening = null;
+
   return true;
 }
 
@@ -1053,22 +1057,82 @@ function simulateMove(b, sx, sy, tx, ty, state) {
   };
 }
 
-function makeAIMove() {
-  // ===== 黒の最初2手だけオープニング通り =====
-  if (makeBlackOpeningMove()) return;
+function makeRandomMove() {
+  const allMoves = [];
 
-  // ===== 通常AI処理 =====
-  let bestScore = -Infinity;
-  let bestMove = null;
-
-  const useDeep = Math.random() < 0.15;
-  const positions = [];
   for (let y = 0; y < 8; y++) {
     for (let x = 0; x < 8; x++) {
-      positions.push({ x, y });
+      const p = board[y][x];
+      if (!p || p[0] !== "b") continue;
+
+      const moves = getLegalMoves(x, y, board, enPassant);
+      for (const m of moves) {
+        allMoves.push({ sx: x, sy: y, tx: m.x, ty: m.y });
+      }
     }
   }
 
+  if (allMoves.length === 0) return;
+
+  const move = allMoves[Math.floor(Math.random() * allMoves.length)];
+
+  clickCell(move.sx, move.sy);
+  clickCell(move.tx, move.ty);
+}
+
+function calculateMovePenalty(p, fromX, fromY, toX, toY, simBoard, enPassant) {
+  let penalty = 0;
+
+  // ===== 王の移動を制限している場合のペナルティ =====
+  // 白キングの位置を取得
+  let kingPos = null;
+  for (let y = 0; y < 8; y++) {
+    for (let x = 0; x < 8; x++) {
+      const sq = simBoard[y][x];
+      if (sq && sq === "wK") kingPos = { x, y };
+    }
+  }
+
+  if (kingPos) {
+    // この駒を動かすと白キングが移動できるマスが増えるか？
+    // シンプル判定：現在チェックをかけている駒ならペナルティ
+    const moves = getLegalMoves(fromX, fromY, simBoard, enPassant);
+    if (moves.some(m => m.x === kingPos.x && m.y === kingPos.y)) {
+      // 白キングを縛っている駒はペナルティ
+      penalty -= pieceValue[p[1]] * 0.7; 
+    }
+  }
+
+  // ===== 通常チェックペナルティ =====
+  const sim = simulateMove(simBoard, fromX, fromY, toX, toY, { enPassant });
+  if (isSquareAttacked(sim.board, toX, toY, "w", sim.state.enPassant)) {
+    penalty -= pieceValue[p[1]] * 0.6;
+  }
+
+  return penalty;
+}
+
+function makeAIMove() {
+  // ===== オープニング手優先 =====
+  if (makeBlackOpeningMove()) return;
+
+  let bestScore = -Infinity;
+  let bestMove = null;
+  const useDeep = Math.random() < 0.15;
+
+  // 白キングの位置を先に取得
+  let whiteKingPos = null;
+  for (let y = 0; y < 8; y++) {
+    for (let x = 0; x < 8; x++) {
+      if (board[y][x] === "wK") whiteKingPos = { x, y };
+    }
+  }
+
+  // 全駒位置をシャッフル
+  const positions = [];
+  for (let y = 0; y < 8; y++) {
+    for (let x = 0; x < 8; x++) positions.push({ x, y });
+  }
   const shuffled = [...positions].sort(() => Math.random() - 0.5);
 
   for (const pos of shuffled) {
@@ -1083,11 +1147,26 @@ function makeAIMove() {
     for (const m of moves) {
       const sim = simulateMove(board, x, y, m.x, m.y, { enPassant });
 
+      // ===== ペナルティ計算 =====
       let movePenalty = 0;
+
+      // 1. 通常チェックによるペナルティ
       if (isSquareAttacked(sim.board, m.x, m.y, "w", sim.state.enPassant)) {
         movePenalty -= pieceValue[p[1]] * 0.6;
       }
 
+      // 2. 白キングの移動を制限している駒にペナルティ
+      if (whiteKingPos) {
+        const whiteKingMovesBefore = getLegalMoves(whiteKingPos.x, whiteKingPos.y, board, enPassant);
+        const whiteKingMovesAfter = getLegalMoves(whiteKingPos.x, whiteKingPos.y, sim.board, sim.state.enPassant);
+
+        if (whiteKingMovesAfter.length < whiteKingMovesBefore.length) {
+          // 白キングの移動範囲を減らす駒はペナルティ
+          movePenalty -= pieceValue[p[1]] * 0.7;
+        }
+      }
+
+      // ===== 相手最悪手シミュレーション =====
       let worstScore = Infinity;
       for (let yy = 0; yy < 8; yy++) {
         for (let xx = 0; xx < 8; xx++) {
@@ -1097,11 +1176,9 @@ function makeAIMove() {
           const opMoves = getLegalMoves(xx, yy, sim.board, sim.state.enPassant);
           for (const om of opMoves) {
             const sim2 = simulateMove(sim.board, xx, yy, om.x, om.y, sim.state);
-
             const score = useDeep
               ? deepEvaluate(sim2.board, sim2.state)
               : evaluateBoard(sim2.board);
-
             if (score < worstScore) worstScore = score;
           }
         }
@@ -1121,8 +1198,10 @@ function makeAIMove() {
     }
   }
 
+  // フォールバック：合法手が無ければランダムで動く
   if (!bestMove) {
-    console.log("AI: no legal moves");
+    console.log("AI fallback: random move");
+    makeRandomMove();
     return;
   }
 
