@@ -865,8 +865,6 @@ function endTurn() {
 
 //シングルモード
 
-let lastMovedPiece = null;
-
 const pieceValue = {
   P:1,
   N:3,
@@ -931,6 +929,7 @@ function makeBlackOpeningMove() {
   return true;
 }
 
+
 function evaluateBoard(b) {
   let score = 0;
 
@@ -957,62 +956,10 @@ function isSquareAttacked(board, x, y, attackerColor, enPassant) {
   for (let yy = 0; yy < 8; yy++) {
     for (let xx = 0; xx < 8; xx++) {
       const p = board[yy][xx];
-      if (!p || p[0] !== attackerColor) continue;
-
-      const type = p[1];
-
-      // ===== ポーン =====
-      if (type === "P") {
-        const dir = attackerColor === "w" ? -1 : 1;
-        if (xx - 1 === x && yy + dir === y) return true;
-        if (xx + 1 === x && yy + dir === y) return true;
-      }
-
-      // ===== ナイト =====
-      if (type === "N") {
-        const dx = Math.abs(xx - x);
-        const dy = Math.abs(yy - y);
-        if ((dx === 1 && dy === 2) || (dx === 2 && dy === 1)) return true;
-      }
-
-      // ===== キング =====
-      if (type === "K") {
-        if (Math.abs(xx - x) <= 1 && Math.abs(yy - y) <= 1) return true;
-      }
-
-      // ===== 直線系（R,Q） =====
-      if (type === "R" || type === "Q") {
-        if (xx === x || yy === y) {
-          const dx = Math.sign(x - xx);
-          const dy = Math.sign(y - yy);
-          let cx = xx + dx;
-          let cy = yy + dy;
-
-          while (cx !== x || cy !== y) {
-            if (board[cy][cx]) break;
-            cx += dx;
-            cy += dy;
-          }
-
-          if (cx === x && cy === y) return true;
-        }
-      }
-
-      // ===== 斜め系（B,Q） =====
-      if (type === "B" || type === "Q") {
-        if (Math.abs(xx - x) === Math.abs(yy - y)) {
-          const dx = Math.sign(x - xx);
-          const dy = Math.sign(y - yy);
-          let cx = xx + dx;
-          let cy = yy + dy;
-
-          while (cx !== x || cy !== y) {
-            if (board[cy][cx]) break;
-            cx += dx;
-            cy += dy;
-          }
-
-          if (cx === x && cy === y) return true;
+      if (p && p[0] === attackerColor) {
+        const moves = getLegalMoves(xx, yy, board, enPassant);
+        if (moves.some(m => m.x === x && m.y === y)) {
+          return true;
         }
       }
     }
@@ -1020,10 +967,8 @@ function isSquareAttacked(board, x, y, attackerColor, enPassant) {
   return false;
 }
 
-
 function deepEvaluate(board, state) {
   let best = -Infinity;
-  let count = 0;
 
   for (let y = 0; y < 8; y++) {
     for (let x = 0; x < 8; x++) {
@@ -1034,12 +979,10 @@ function deepEvaluate(board, state) {
 
         for (const m of moves) {
           const sim = simulateMove(board, x, y, m.x, m.y, state);
+
           const score = evaluateBoard(sim.board);
 
           if (score > best) best = score;
-
-          count++;
-          if (count > 20) return best; // ← 制限
         }
       }
     }
@@ -1047,6 +990,9 @@ function deepEvaluate(board, state) {
 
   return best;
 }
+
+
+
 
 function simulateMove(b, sx, sy, tx, ty, state) {
   const copy = b.map(r => r.slice());
@@ -1107,91 +1053,15 @@ function simulateMove(b, sx, sy, tx, ty, state) {
   };
 }
 
-// ===== 履歴 =====
-let history = [];
-
-function getBoardHash(board) {
-  return board.flat().join("");
-}
-
-function findKing(board, color) {
-  for (let y = 0; y < 8; y++) {
-    for (let x = 0; x < 8; x++) {
-      const p = board[y][x];
-      if (p === color + "K") {
-        return { x, y };
-      }
-    }
-  }
-  return null;
-}
-
-function isCheckmate(board, color, state, limit = 30) {
-  let count = 0;
-
-  const kingPos = findKing(board, color);
-  if (!kingPos) return true;
-
-  if (!isSquareAttacked(board, kingPos.x, kingPos.y, color === "w" ? "b" : "w", state.enPassant)) {
-    return false;
-  }
-
-  for (let y = 0; y < 8; y++) {
-    for (let x = 0; x < 8; x++) {
-      const p = board[y][x];
-      if (!p || p[0] !== color) continue;
-
-      const moves = getLegalMoves(x, y, board, state.enPassant);
-
-      for (const m of moves) {
-        const sim = simulateMove(board, x, y, m.x, m.y, state);
-        const newKingPos = findKing(sim.board, color);
-
-        if (
-          newKingPos &&
-          !isSquareAttacked(
-            sim.board,
-            newKingPos.x,
-            newKingPos.y,
-            color === "w" ? "b" : "w",
-            sim.state.enPassant
-          )
-        ) {
-          return false;
-        }
-
-        count++;
-        if (count > limit) return false; // ← 打ち切り
-      }
-    }
-  }
-
-  return true;
-}
-
-function kingMobility(board, color, state) {
-  const k = findKing(board, color);
-  if (!k) return 0;
-
-  const moves = getLegalMoves(k.x, k.y, board, state.enPassant);
-  return moves.length;
-}
-
-function isKingCaptured(board, color) {
-  return !board.flat().some(p => p === color + "K");
-}
-
-// ===== AI本体 =====
-
 function makeAIMove() {
+  // ===== 黒の最初2手だけオープニング通り =====
   if (makeBlackOpeningMove()) return;
 
+  // ===== 通常AI処理 =====
   let bestScore = -Infinity;
   let bestMove = null;
 
-  const useDeep = Math.random() < 0.2;
-  const makeMistake = Math.random() < 0.15;
-
+  const useDeep = Math.random() < 0.15;
   const positions = [];
   for (let y = 0; y < 8; y++) {
     for (let x = 0; x < 8; x++) {
@@ -1201,7 +1071,6 @@ function makeAIMove() {
 
   const shuffled = [...positions].sort(() => Math.random() - 0.5);
 
-  outerLoop:
   for (const pos of shuffled) {
     const x = pos.x;
     const y = pos.y;
@@ -1214,118 +1083,37 @@ function makeAIMove() {
     for (const m of moves) {
       const sim = simulateMove(board, x, y, m.x, m.y, { enPassant });
 
-      const kingPos = findKing(sim.board, "w");
-
-      const isCheck =
-        kingPos &&
-        isSquareAttacked(
-          sim.board,
-          kingPos.x,
-          kingPos.y,
-          "b",
-          sim.state.enPassant
-        );
-
-      // ===== 詰み最優先 =====
-      if (isCheck && isCheckmate(sim.board, "w", sim.state)) {
-        bestMove = { sx: x, sy: y, tx: m.x, ty: m.y };
-        bestScore = 10000;
-        break outerLoop;
-      }
-
-      if (isKingCaptured(sim.board, "w")) {
-        bestMove = { sx: x, sy: y, tx: m.x, ty: m.y };
-        bestScore = 9999;
-        break outerLoop;
-      }
-
       let movePenalty = 0;
-
-      // ===== 取られるリスク =====
       if (isSquareAttacked(sim.board, m.x, m.y, "w", sim.state.enPassant)) {
-        movePenalty -= pieceValue[p[1]] * (makeMistake ? 0.3 : 0.7);
-      }
-
-      // ===== チェック（弱め） =====
-      if (isCheck) {
-        const hash = getBoardHash(sim.board);
-
-        if (history.includes(hash)) {
-          movePenalty -= 1.5; // ループ系チェック防止
-        } else {
-          movePenalty += 0.2;
-        }
-      }
-
-      // ===== 同じ駒連続抑制 =====
-      if (p === lastMovedPiece) {
-        movePenalty -= 0.3;
-      }
-
-      // ===== キング距離 =====
-      if (kingPos) {
-        const dist =
-          Math.abs(kingPos.x - m.x) + Math.abs(kingPos.y - m.y);
-        movePenalty += (6 - dist) * 0.05;
-      }
-
-      // ===== 王の可動域（←追加したやつ） =====
-      const mobility = kingMobility(sim.board, "w", sim.state);
-      movePenalty += (8 - mobility) * 0.15;
-
-      // ===== 履歴ペナルティ =====
-      const hash = getBoardHash(sim.board);
-      if (history.includes(hash)) {
-        movePenalty -= 1.2;
+        movePenalty -= pieceValue[p[1]] * 0.6;
       }
 
       let worstScore = Infinity;
-
       for (let yy = 0; yy < 8; yy++) {
         for (let xx = 0; xx < 8; xx++) {
           const op = sim.board[yy][xx];
           if (!op || op[0] !== "w") continue;
 
           const opMoves = getLegalMoves(xx, yy, sim.board, sim.state.enPassant);
-
           for (const om of opMoves) {
             const sim2 = simulateMove(sim.board, xx, yy, om.x, om.y, sim.state);
 
-            const opKing = findKing(sim2.board, "b");
-            const isMyCheck =
-              opKing &&
-              isSquareAttacked(
-                sim2.board,
-                opKing.x,
-                opKing.y,
-                "w",
-                sim2.state.enPassant
-              );
-
-            const score =
-              (useDeep || isMyCheck)
-                ? deepEvaluate(sim2.board, sim2.state)
-                : evaluateBoard(sim2.board);
+            const score = useDeep
+              ? deepEvaluate(sim2.board, sim2.state)
+              : evaluateBoard(sim2.board);
 
             if (score < worstScore) worstScore = score;
           }
         }
       }
 
-      if (worstScore === Infinity) {
-        worstScore = evaluateBoard(sim.board);
-      }
+      if (worstScore === Infinity) worstScore = evaluateBoard(sim.board);
 
-      let finalScore =
-        worstScore + movePenalty + Math.random() * 0.1;
-
-      if (makeMistake) {
-        finalScore += (Math.random() - 0.5) * 1.5;
-      }
+      const finalScore = worstScore + movePenalty + Math.random() * 0.05;
 
       if (
         finalScore > bestScore ||
-        (Math.abs(finalScore - bestScore) < 0.01 && Math.random() < 0.4)
+        (Math.abs(finalScore - bestScore) < 0.0001 && Math.random() < 0.5)
       ) {
         bestScore = finalScore;
         bestMove = { sx: x, sy: y, tx: m.x, ty: m.y };
@@ -1338,18 +1126,9 @@ function makeAIMove() {
     return;
   }
 
-  const movedPiece = board[bestMove.sy][bestMove.sx];
-
   clickCell(bestMove.sx, bestMove.sy);
   clickCell(bestMove.tx, bestMove.ty);
-
-  lastMovedPiece = movedPiece;
-
-  history.push(getBoardHash(board));
-  if (history.length > 50) history.shift();
 }
-
-
 
 // 初期化処理の最後
 
