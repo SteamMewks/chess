@@ -38,11 +38,11 @@ body {
 }
 
 .white {
-  background: #bfbfbf; /* 薄灰色 */
+  background: #bfbfbf;
 }
 
 .black {
-  background: #7a7a7a; /* 濃灰色 */
+  background: #7a7a7a;
 }
 
 .highlight {
@@ -51,11 +51,6 @@ body {
 
 .capture {
   box-shadow: inset 0 0 0 4px rgba(255,80,80,0.8);
-}
-
-.blackPawn {
-  color:black;
-  text-shadow:0 0 0 black;
 }
 
 .whitePiece {
@@ -68,7 +63,6 @@ body {
   text-shadow: 0 0 2px #fff;
   transform: rotate(180deg);
 }
-
 
 #message {
   text-align:center;
@@ -88,21 +82,138 @@ body {
   box-shadow: inset 0 0 0 4px #ff4444;
 }
 
+.points {
+  font-size: 1.2em;
+  margin: 6px 0;
+  text-align: center;
+  user-select: none;
+}
+
+.skills {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  margin: 6px 0;
+}
+
+.skills button {
+  padding: 4px 8px;
+  font-size: 0.85em;
+  cursor: pointer;
+}
+
+.black-ui {
+  transform: rotate(180deg);
+  color: #ddd;
+}
+
+.white-ui {
+  color: #fff;
+}
+
+#blackHint, #whiteHint {
+  font-size: 12px;
+}
 
 </style>
 </head>
+
 <body>
+
+<div id="startScreen">
+  <h2>モード選択</h2>
+  <p>通常モード：純粋なチェスルールで対戦します</p>
+  <p>変則モード：ポイントを使ってスキルが使えます</p>
+  <p>ソロモード：AIを相手に対局するモードです</p>
+
+  <button onclick="startGame('normal')">通常モード</button>
+  <button onclick="startGame('skill')">変則モード</button>
+  <button onclick="startGame('single')">ソロモード</button>
+</div>
+
+<div id="gameUI" style="display:none;">
+
+<!-- 黒側 UI（上） -->
+
+<div id="blackHint" class="black-ui"></div>
+
+<div id="blackPoints" class="points black-ui">
+  黒ポイント: <span id="blackPt">0</span>
+</div>
+
+<div class="skills black-ui">
+  <button onclick="activateSkill('placePawn')">+P (2)</button>
+  <button onclick="activateSkill('deleteEnemyPawn')">×P (3)</button>
+  <button onclick="useSkill('shuffleEnemy')">SHUFFLE (5)</button>
+  <button onclick="activateSkill('promotePawn')">P→Q (7)</button>
+</div>
 
 <div id="message"></div><hr>
 <div id="board"></div><hr>
-<div id="hint"></div>
+
+<!-- 白側 UI（下） -->
+
+<div class="skills white-ui">
+  <button onclick="activateSkill('placePawn')">+P (2)</button>
+  <button onclick="activateSkill('deleteEnemyPawn')">×P (3)</button>
+  <button onclick="useSkill('shuffleEnemy')">SHUFFLE (5)</button>
+  <button onclick="activateSkill('promotePawn')">P→Q (7)</button>
+</div>
+
+<div id="whitePoints" class="points white-ui">
+  白ポイント: <span id="whitePt">0</span>
+</div>
+
+<div id="whiteHint" class="white-ui"></div>
+
+</div>
+
+</body>
 
 
 <script>
 
-let enPassant = null;
-// { x, y, color }
+let gameMode = null; // "normal" or "skill"
 
+function startGame(mode) {
+  gameMode = mode;
+
+  document.getElementById("startScreen").style.display = "none";
+  document.getElementById("gameUI").style.display = "block";
+
+  // スキル非表示条件まとめ
+  if (mode === "normal" || mode === "single") {
+    document.querySelectorAll(".skills").forEach(el => {
+      el.style.display = "none";
+    });
+    document.getElementById("whitePoints").style.display = "none";
+    document.getElementById("blackPoints").style.display = "none";
+  }
+
+  drawBoard();
+  updateHint();
+
+  initOpening();
+
+}
+
+let pendingSkill = null;
+let lastMoveMessage = "";
+
+function activateSkill(name) {
+  pendingSkill = name;
+  document.getElementById("hint").textContent =
+    "ヒント：スキル対象のマスをクリックしてください";
+}
+
+const skills = {
+  placePawn: { cost: 2 },
+  deleteEnemyPawn: { cost: 3 },
+  shuffleEnemy: { cost: 5 },
+  promotePawn: { cost: 7 }
+};
+
+let enPassant = null;
 
 const boardEl = document.getElementById("board");
 
@@ -111,6 +222,7 @@ const pieces = {
   bP:"♙", bR:"♜", bN:"♞", bB:"♝", bQ:"♛", bK:"♚"
 };
 
+let points = { w: 0, b: 0 };
 
 let moved = {
   wK:false, bK:false,
@@ -135,16 +247,18 @@ let selected = null;
 function drawBoard() {
   boardEl.innerHTML = "";
 
-const messageEl = document.getElementById("message");
-messageEl.textContent = "";
+  const messageEl = document.getElementById("message");
+  messageEl.textContent = lastMoveMessage;
+  lastMoveMessage = "";
 
-if (isCheckmate(turn)) {
-  messageEl.textContent =
-    "チェックメイト！ " + (turn==="w" ? "黒" : "白") + "の勝ち";
-} else if (isKingInCheck(turn)) {
-  messageEl.textContent = "チェック！";
-}
-
+  if (isCheckmate(turn)) {
+    messageEl.textContent =
+      "チェックメイト！ " + (turn==="w" ? "黒" : "白") + "の勝ち";
+  } else if (isStalemate(turn)) {
+    messageEl.textContent = "ステイルメイト！引き分け";
+  } else if (isKingInCheck(turn)) {
+    messageEl.textContent = "チェック！";
+  }
 
   let legalMoves = [];
   if (selected) {
@@ -157,27 +271,25 @@ if (isCheckmate(turn)) {
 
     const piece = board[y][x];
 
-if (piece) {
-  cell.textContent = pieces[piece];
+    if (piece) {
+      cell.textContent = pieces[piece];
 
-  if (piece[0] === "b") cell.classList.add("blackPiece");
-  else cell.classList.add("whitePiece");
+      if (piece[0] === "b") cell.classList.add("blackPiece");
+      else cell.classList.add("whitePiece");
 
-  // チェック中のキング
-  if (
-    piece[1] === "K" &&
-    piece[0] === turn &&
-    isKingInCheck(turn)
-  ) {
-    cell.classList.add("checkKing");
-  }
-}
-    // 選択中の駒
+      if (
+        piece[1] === "K" &&
+        piece[0] === turn &&
+        isKingInCheck(turn)
+      ) {
+        cell.classList.add("checkKing");
+      }
+    }
+
     if (selected && selected.x===x && selected.y===y) {
       cell.classList.add("selected");
     }
 
-    // 合法手ハイライト
     if (selected) {
       const m = legalMoves.find(v=>v.x===x && v.y===y);
       if (m) {
@@ -190,15 +302,27 @@ if (piece) {
     boardEl.appendChild(cell);
   }
 
-updateHint();
-
+  updateHint();
+  updatePoints();
 }
-
 
 
 function clickCell(x,y) {
   const piece = board[y][x];
-const prevEnPassant = enPassant;
+  const prevEnPassant = enPassant;
+
+  if (gameMode === "normal") {
+    pendingSkill = null;
+  }
+
+  if (isCheckmate(turn) || isStalemate(turn)) return;
+
+  // ===== スキル使用待機中 =====
+  if (pendingSkill) {
+    useSkill(pendingSkill, { x, y });
+    pendingSkill = null;
+    return;
+  }
 
   // ===== 未選択状態 =====
   if (!selected) {
@@ -224,21 +348,19 @@ const prevEnPassant = enPassant;
     ) {
       const p = board[sy][sx];
 
-      // ===== en passant 初期化（毎手リセット）=====
+      // ===== 捕獲判定用 =====
+      const captured = board[y][x];
+      let enPassantCaptured = false;
+      let didCastle = false;
+
+      // ===== en passant 初期化 =====
       enPassant = null;
 
-      // ===== ポーン2マス前進を記録 =====
-      if (p[1] === "P" && Math.abs(y - sy) === 2) {
-        enPassant = {
-          x: x,
-          y: y,
-          color: p[0]
-        };
-      }
-
-      // キャスリング処理
+      // ===== キャスリング処理 =====
       if (p[1] === "K" && Math.abs(x - sx) === 2) {
         const row = sy;
+        didCastle = true;
+
         if (x > sx) {
           board[row][5] = board[row][7];
           board[row][7] = "";
@@ -250,31 +372,43 @@ const prevEnPassant = enPassant;
         }
       }
 
-// アンパッサンによる捕獲
-if (
-  p[1] === "P" &&
-  prevEnPassant &&
-  x === prevEnPassant.x &&
-  sy === prevEnPassant.y &&
-  prevEnPassant.color !== p[0]
-) {
-  board[prevEnPassant.y][prevEnPassant.x] = "";
-}
+      // ===== アンパッサンによる捕獲 =====
+      if (
+        p[1] === "P" &&
+        prevEnPassant &&
+        x === prevEnPassant.x &&
+        sy === prevEnPassant.y &&
+        prevEnPassant.color !== p[0]
+      ) {
+        board[prevEnPassant.y][prevEnPassant.x] = "";
+        enPassantCaptured = true;
+      }
 
-// en passant 初期化
-enPassant = null;
+      // ===== ポーン2マス前進を記録 =====
+      if (p[1] === "P" && Math.abs(y - sy) === 2) {
+        enPassant = {
+          x: x,
+          y: y,
+          color: p[0]
+        };
+      }
 
-// 今回の2マス前進を記録
-if (p[1] === "P" && Math.abs(y - sy) === 2) {
-  enPassant = {
-    x: x,
-    y: y,
-    color: p[0]
-  };
-}
-
+      // ===== 実移動 =====
       board[y][x] = p;
       board[sy][sx] = "";
+
+      // ===== ポイント付与 =====
+      if (captured || enPassantCaptured) {
+        const loser = turn === "w" ? "b" : "w";
+        points[loser] += 1;
+      }
+
+      // ===== 特殊手メッセージ =====
+      if (didCastle) {
+        lastMoveMessage = "キャスリング！";
+      } else if (enPassantCaptured) {
+        lastMoveMessage = "アンパッサン！";
+      }
 
       // moved 更新
       if (p[1] === "K") moved[p] = true;
@@ -283,9 +417,14 @@ if (p[1] === "P" && Math.abs(y - sy) === 2) {
         if (sx === 7) moved[p[0] + "R7"] = true;
       }
 
+      // ===== 昇格処理 =====
+      const before = board[y][x];
       promote(y, x);
+      if (before[1] === "P" && board[y][x][1] === "Q") {
+        lastMoveMessage = "プロモーション！";
+      }
 
-      turn = turn === "w" ? "b" : "w";
+      endTurn();
     }
 
     selected = null;
@@ -296,154 +435,273 @@ if (p[1] === "P" && Math.abs(y - sy) === 2) {
 }
 
 
+// ===== 経路チェック =====
 function isPathClear(sx,sy,tx,ty,b=board) {
   const dx = Math.sign(tx-sx), dy = Math.sign(ty-sy);
-  let x=sx+dx, y=sy+dy;
-  while (x!==tx || y!==ty) {
+  let x = sx + dx, y = sy + dy;
+
+  while (x !== tx || y !== ty) {
     if (b[y][x]) return false;
-    x+=dx; y+=dy;
+    x += dx;
+    y += dy;
   }
+
   return true;
 }
 
-function canMoveRaw(sx,sy,tx,ty,b=board) {
+function canMoveRaw(sx, sy, tx, ty, b=board, ep=enPassant) {
   const p = b[sy][sx];
   if (!p) return false;
-  const dx=tx-sx, dy=ty-sy;
-  const t=b[ty][tx];
-  if (t && t[0]===p[0]) return false;
 
-  switch(p[1]) {
-case "P": {
-  const dir = p[0] === "w" ? -1 : 1;
+  const dx = tx - sx, dy = ty - sy;
+  const t = b[ty][tx];
 
-  // 通常前進
-  if (dx === 0 && dy === dir && !t) return true;
+  if (t && t[0] === p[0]) return false;
 
-  // 初手2マス
+  switch (p[1]) {
+
+    case "P": {
+      const dir = p[0] === "w" ? -1 : 1;
+
+      // 通常前進
+      if (dx === 0 && dy === dir && !t) return true;
+
+      // 初手2マス
+      if (
+        dx === 0 &&
+        dy === 2 * dir &&
+        !t &&
+        !b[sy + dir][sx] &&
+        ((p[0] === "w" && sy === 6) || (p[0] === "b" && sy === 1))
+      ) return true;
+
+      // 通常取り
+      if (Math.abs(dx) === 1 && dy === dir && t) return true;
+
+      // ===== アンパッサン =====
+      if (
+        Math.abs(dx) === 1 &&
+        dy === dir &&
+        !t &&
+        ep &&
+        ep.color !== p[0] &&
+        ep.x === tx &&
+        ep.y === sy
+      ) {
+        return true;
+      }
+
+      return false;
+    }
+
+    case "R":
+      return (dx === 0 || dy === 0) && isPathClear(sx, sy, tx, ty, b);
+
+    case "B":
+      return Math.abs(dx) === Math.abs(dy) && isPathClear(sx, sy, tx, ty, b);
+
+    case "Q":
+      return (
+        (dx === 0 || dy === 0) ||
+        Math.abs(dx) === Math.abs(dy)
+      ) && isPathClear(sx, sy, tx, ty, b);
+
+    case "N":
+      return (
+        (Math.abs(dx) === 2 && Math.abs(dy) === 1) ||
+        (Math.abs(dx) === 1 && Math.abs(dy) === 2)
+      );
+
+    case "K": {
+      if (Math.abs(dx) <= 1 && Math.abs(dy) <= 1) return true;
+
+      if (dy === 0 && Math.abs(dx) === 2) {
+        return canCastle(p[0], dx > 0 ? "king" : "queen");
+      }
+
+      return false;
+    }
+  }
+
+  return false;
+}
+
+
+function isKingInCheck(color, b=board, ep=enPassant) {
+
+  let kx = -1, ky = -1;
+
+  // 王の位置取得
+  for (let y = 0; y < 8; y++) {
+    for (let x = 0; x < 8; x++) {
+      if (b[y][x] === color + "K") {
+        kx = x;
+        ky = y;
+      }
+    }
+  }
+
+  if (kx === -1) return false;
+
+  // 相手の攻撃判定
+  for (let y = 0; y < 8; y++) {
+    for (let x = 0; x < 8; x++) {
+      const p = b[y][x];
+      if (p && p[0] !== color) {
+        if (canMoveRaw(x, y, kx, ky, b, ep)) return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+
+function isLegalMove(sx, sy, tx, ty, b=board, ep=enPassant) {
+  const copy = b.map(r => r.slice());
+  const p = copy[sy][sx];
+
+  // ===== アンパッサン反映 =====
   if (
-    dx === 0 &&
-    dy === 2 * dir &&
-    !t &&
-    !b[sy + dir][sx] &&
-    ((p[0] === "w" && sy === 6) || (p[0] === "b" && sy === 1))
-  ) return true;
-
-  // 通常取り
-  if (Math.abs(dx) === 1 && dy === dir && t) return true;
-
-  // ===== アンパッサン =====
-  if (
-    Math.abs(dx) === 1 &&
-    dy === dir &&
-    !t &&
-    enPassant &&
-    enPassant.color !== p[0] &&
-    enPassant.x === tx &&
-    enPassant.y === sy
+    p[1] === "P" &&
+    ep &&
+    Math.abs(tx - sx) === 1 &&
+    ty - sy === (p[0] === "w" ? -1 : 1) &&
+    ep.x === tx &&
+    ep.y === sy
   ) {
+    copy[ep.y][ep.x] = "";
+  }
+
+  // 移動適用
+  copy[ty][tx] = p;
+  copy[sy][sx] = "";
+
+  return !isKingInCheck(p[0], copy, ep);
+}
+
+function canCastle(color, side) {
+  const y = color === "w" ? 7 : 0;
+
+  if (moved[color + "K"]) return false;
+
+  // 現在チェック中なら不可
+  if (isKingInCheck(color)) return false;
+
+  if (side === "king") {
+    if (moved[color + "R7"]) return false;
+    if (board[y][5] || board[y][6]) return false;
+
+    // 通過マスチェック
+    const copy = board.map(r => r.slice());
+
+    // fマス
+    copy[y][4] = "";
+    copy[y][5] = color + "K";
+    if (isKingInCheck(color, copy)) return false;
+
+    // gマス
+    copy[y][5] = "";
+    copy[y][6] = color + "K";
+    if (isKingInCheck(color, copy)) return false;
+
+    return true;
+  }
+
+  if (side === "queen") {
+    if (moved[color + "R0"]) return false;
+    if (board[y][1] || board[y][2] || board[y][3]) return false;
+
+    const copy = board.map(r => r.slice());
+
+    // dマス
+    copy[y][4] = "";
+    copy[y][3] = color + "K";
+    if (isKingInCheck(color, copy)) return false;
+
+    // cマス
+    copy[y][3] = "";
+    copy[y][2] = color + "K";
+    if (isKingInCheck(color, copy)) return false;
+
     return true;
   }
 
   return false;
 }
-    case "R": return (dx===0||dy===0)&&isPathClear(sx,sy,tx,ty,b);
-    case "B": return Math.abs(dx)===Math.abs(dy)&&isPathClear(sx,sy,tx,ty,b);
-    case "Q": return ((dx===0||dy===0)||Math.abs(dx)===Math.abs(dy))&&isPathClear(sx,sy,tx,ty,b);
-    case "N": return (Math.abs(dx)==2&&Math.abs(dy)==1)||(Math.abs(dx)==1&&Math.abs(dy)==2);
-    case "K": {
-      if (Math.abs(dx)<=1&&Math.abs(dy)<=1) return true;
-      if (dy===0&&Math.abs(dx)===2) {
-        return canCastle(p[0], dx>0?"king":"queen");
-      }
-      return false;
-    }
-  }
-}
 
-function isKingInCheck(color,b=board) {
-  let kx,ky;
-  for (let y=0;y<8;y++) for (let x=0;x<8;x++) {
-    if (b[y][x]===color+"K") {kx=x;ky=y;}
-  }
-  for (let y=0;y<8;y++) for (let x=0;x<8;x++) {
-    const p=b[y][x];
-    if (p && p[0]!==color) {
-      if (canMoveRaw(x,y,kx,ky,b)) return true;
-    }
-  }
-  return false;
-}
-
-function isLegalMove(sx,sy,tx,ty) {
-  const copy = board.map(r=>r.slice());
-  const p = copy[sy][sx];
-
-  // アンパッサン捕獲を反映
-  if (
-    p[1] === "P" &&
-    enPassant &&
-    Math.abs(tx - sx) === 1 &&
-    ty - sy === (p[0]==="w" ? -1 : 1) &&
-    enPassant.x === tx &&
-    enPassant.y === sy
-  ) {
-    copy[enPassant.y][enPassant.x] = "";
-  }
-
-  copy[ty][tx] = p;
-  copy[sy][sx] = "";
-
-  return !isKingInCheck(p[0], copy);
-}
-
-function canCastle(color,side) {
-  const y=color==="w"?7:0;
-  if (moved[color+"K"]) return false;
-  if (side==="king") {
-    if (moved[color+"R7"]) return false;
-    if (board[y][5]||board[y][6]) return false;
-    return !isKingInCheck(color);
-  }
-  if (side==="queen") {
-    if (moved[color+"R0"]) return false;
-    if (board[y][1]||board[y][2]||board[y][3]) return false;
-    return !isKingInCheck(color);
-  }
-}
-
-function promote(y,x) {
-  if (board[y][x][1]==="P"&&(y===0||y===7)) {
-    board[y][x]=board[y][x][0]+"Q";
+function promote(y, x) {
+  if (board[y][x][1] === "P" && (y === 0 || y === 7)) {
+    board[y][x] = board[y][x][0] + "Q";
   }
 }
 
 function isCheckmate(color) {
   if (!isKingInCheck(color)) return false;
-  for (let y=0;y<8;y++) for (let x=0;x<8;x++) {
-    const p=board[y][x];
-    if (p&&p[0]===color) {
-      for (let ty=0;ty<8;ty++) for (let tx=0;tx<8;tx++) {
-        if (canMoveRaw(x,y,tx,ty)&&isLegalMove(x,y,tx,ty)) return false;
+
+  for (let y = 0; y < 8; y++) {
+    for (let x = 0; x < 8; x++) {
+      const p = board[y][x];
+
+      if (p && p[0] === color) {
+        for (let ty = 0; ty < 8; ty++) {
+          for (let tx = 0; tx < 8; tx++) {
+            if (
+              canMoveRaw(x, y, tx, ty, board, enPassant) &&
+              isLegalMove(x, y, tx, ty, board, enPassant)
+            ) {
+              return false;
+            }
+          }
+        }
       }
     }
   }
+
   return true;
 }
 
-function getLegalMoves(sx, sy) {
-  const moves = [];
-  for (let y=0;y<8;y++) for (let x=0;x<8;x++) {
-    if (
-      canMoveRaw(sx,sy,x,y) &&
-      isLegalMove(sx,sy,x,y)
-    ) {
-      moves.push({x,y});
+function isStalemate(color) {
+  if (isKingInCheck(color)) return false;
+
+  for (let y = 0; y < 8; y++) {
+    for (let x = 0; x < 8; x++) {
+      const p = board[y][x];
+
+      if (p && p[0] === color) {
+        for (let ty = 0; ty < 8; ty++) {
+          for (let tx = 0; tx < 8; tx++) {
+            if (
+              canMoveRaw(x, y, tx, ty, board, enPassant) &&
+              isLegalMove(x, y, tx, ty, board, enPassant)
+            ) {
+              return false;
+            }
+          }
+        }
+      }
     }
   }
-  return moves;
+
+  return true;
 }
 
+function getLegalMoves(sx, sy, b = board, ep = enPassant) {
+  const moves = [];
+
+  for (let y = 0; y < 8; y++) {
+    for (let x = 0; x < 8; x++) {
+      if (
+        canMoveRaw(sx, sy, x, y, b, ep) &&
+        isLegalMove(sx, sy, x, y, b, ep)
+      ) {
+        moves.push({ x, y });
+      }
+    }
+  }
+
+  return moves;
+}
 
 const pieceHints = {
   K: "キング：チェックを受けると必ず対処が必要です。未移動ならキャスリングが可能です。",
@@ -454,46 +712,650 @@ const pieceHints = {
   P: "ポーン：前進のみ。初手は2マス可。最奥で昇格します。"
 };
 
-
 function updateHint() {
+  const whiteEl = document.getElementById("whiteHint");
+  const blackEl = document.getElementById("blackHint");
+
   let text = "";
 
-  // チェックメイト最優先
   if (isCheckmate(turn)) {
     text = "チェックメイト！ゲームは終了しました。";
 
-  // チェック中
+  } else if (isStalemate(turn)) {
+    text = "ステイルメイト！これ以上合法手がありません。引き分けです。";
+
   } else if (isKingInCheck(turn)) {
     text = "チェック中！キングを守るか逃がしてください。";
 
-  // 駒選択中
   } else if (selected) {
     const p = board[selected.y][selected.x];
     const type = p[1];
 
-    // 駒固有ヒント
     text = pieceHints[type] || "この駒のヒントは未定義です。";
 
-    // 追加条件ヒント（重ねがけ）
     if (type === "K" && !moved[p[0] + "K"]) {
-      text += " キャスリング可能な場合があります。";
+      text += " キャスリング可能。";
     }
 
-  // 通常状態
   } else {
     text = "駒を選択すると合法手がハイライト表示されます。";
   }
 
-  document.getElementById("hint").textContent = "ヒント：" + text;
+  if (turn === "w") {
+    whiteEl.innerHTML = "ヒント：<br>" + text;
+    blackEl.innerHTML = "相手のターンです";
+  } else {
+    blackEl.innerHTML = "ヒント：<br>" + text;
+    whiteEl.innerHTML = "相手のターンです";
+  }
+}
+
+function updatePoints() {
+  document.getElementById("whitePt").textContent = points.w;
+  document.getElementById("blackPt").textContent = points.b;
+}
+
+function useSkill(skillName, payload) {
+  const skill = skills[skillName];
+
+  if (gameMode !== "skill") return;
+  if (!skill) return;
+
+  if (points[turn] < skill.cost) {
+    alert("ポイントが足りない！");
+    return;
+  }
+
+  // 実行
+  const success = skillEffects[skillName](payload);
+
+  if (!success) {
+    document.getElementById("hint").textContent =
+      "ヒント：その対象には使用できません";
+    return;
+  }
+
+  // 成功時のみ消費
+  points[turn] -= skill.cost;
+
+  selected = null;
+  turn = turn === "w" ? "b" : "w";
+
+  drawBoard();
+  updateHint();
+  updatePoints();
+}
+
+
+const skillEffects = {
+
+  // 1pt：ポーンを任意マスに配置
+  placePawn({ x, y }) {
+    if (board[y][x]) return false;
+    board[y][x] = turn + "P";
+    return true;
+  },
+
+  // 3pt：相手のポーン1つを消去
+  deleteEnemyPawn({ x, y }) {
+    const p = board[y][x];
+    if (!p) return false;
+    if (p[1] !== "P") return false;
+    if (p[0] === turn) return false;
+
+    board[y][x] = "";
+    return true;
+  },
+
+  // 5pt：ポーンを即クイーンに
+  promotePawn({ x, y }) {
+    const p = board[y][x];
+    if (!p) return false;
+    if (p[0] !== turn) return false;
+    if (p[1] !== "P") return false;
+
+    board[y][x] = turn + "Q";
+    return true;
+  },
+
+  // 7pt：相手の駒配置をシャッフル
+  shuffleEnemy() {
+    const enemy = turn === "w" ? "b" : "w";
+    const positions = [];
+    const pieces = [];
+
+    for (let y = 0; y < 8; y++) {
+      for (let x = 0; x < 8; x++) {
+        const p = board[y][x];
+        if (p && p[0] === enemy) {
+          positions.push({ x, y });
+          pieces.push(p);
+          board[y][x] = "";
+        }
+      }
+    }
+
+    // シャッフル（修正）
+    for (let i = pieces.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [pieces[i], pieces[j]] = [pieces[j], pieces[i]];
+    }
+
+    positions.forEach((pos, i) => {
+      board[pos.y][pos.x] = pieces[i];
+    });
+
+    return true;
+  }
+
+};
+
+
+function endTurn() {
+  turn = turn === "w" ? "b" : "w";
+
+  drawBoard();
+  updateHint();
+  updatePoints();
+
+  if (gameMode === "single" && turn === "b") {
+    setTimeout(makeAIMove, 300);
+  }
+}
+
+//シングルモード
+
+let lastMovedPiece = null;
+
+const pieceValue = {
+  P:1,
+  N:3,
+  B:3,
+  R:5,
+  Q:9,
+  K:100
+};
+
+
+const openings = [
+  // カロカン
+  [
+    { from: [4,6], to: [4,4] }, // e4
+    { from: [2,1], to: [2,3] }  // c6
+  ],
+
+  // スカンジナビアン
+  [
+    { from: [4,6], to: [4,4] }, // e4
+    { from: [3,1], to: [3,3] }  // d5
+  ],
+
+  // e5
+  [
+    { from: [4,6], to: [4,4] }, // e4
+    { from: [4,1], to: [4,3] }  // e5
+  ],
+
+  // シチリアン
+  [
+    { from: [4,6], to: [4,4] }, // e4
+    { from: [2,1], to: [2,3] }  // c5
+  ]
+];
+
+let currentOpening = null;
+let openingStep = 0;
+
+function initOpening() {
+  currentOpening =
+    openings[Math.floor(Math.random() * openings.length)];
+  openingStep = 0;
+}
+
+function makeBlackOpeningMove() {
+  if (!currentOpening || openingStep >= currentOpening.length) return false;
+
+  const move = currentOpening[openingStep];
+  const piece = board[move.from[1]][move.from[0]];
+
+  // 黒の手じゃない → スキップだけ（終了しない）
+  if (!piece || piece[0] !== "b") {
+    openingStep++;
+    return false; // ←ここが超重要！！
+  }
+
+  clickCell(move.from[0], move.from[1]);
+  clickCell(move.to[0], move.to[1]);
+
+  openingStep++;
+  return true;
+}
+
+function evaluateBoard(b) {
+  let score = 0;
+
+  for (let y = 0; y < 8; y++) {
+    for (let x = 0; x < 8; x++) {
+      const p = b[y][x];
+      if (!p) continue;
+
+      const val = pieceValue[p[1]];
+
+      const centerBonus =
+        3 - Math.abs(3.5 - x) - Math.abs(3.5 - y);
+
+      const total = val + centerBonus * 0.1;
+
+      score += (p[0] === "b" ? total : -total);
+    }
+  }
+
+  return score;
+}
+
+function isSquareAttacked(board, x, y, attackerColor, enPassant) {
+  for (let yy = 0; yy < 8; yy++) {
+    for (let xx = 0; xx < 8; xx++) {
+      const p = board[yy][xx];
+      if (!p || p[0] !== attackerColor) continue;
+
+      const type = p[1];
+
+      // ===== ポーン =====
+      if (type === "P") {
+        const dir = attackerColor === "w" ? -1 : 1;
+        if (xx - 1 === x && yy + dir === y) return true;
+        if (xx + 1 === x && yy + dir === y) return true;
+      }
+
+      // ===== ナイト =====
+      if (type === "N") {
+        const dx = Math.abs(xx - x);
+        const dy = Math.abs(yy - y);
+        if ((dx === 1 && dy === 2) || (dx === 2 && dy === 1)) return true;
+      }
+
+      // ===== キング =====
+      if (type === "K") {
+        if (Math.abs(xx - x) <= 1 && Math.abs(yy - y) <= 1) return true;
+      }
+
+      // ===== 直線系（R,Q） =====
+      if (type === "R" || type === "Q") {
+        if (xx === x || yy === y) {
+          const dx = Math.sign(x - xx);
+          const dy = Math.sign(y - yy);
+          let cx = xx + dx;
+          let cy = yy + dy;
+
+          while (cx !== x || cy !== y) {
+            if (board[cy][cx]) break;
+            cx += dx;
+            cy += dy;
+          }
+
+          if (cx === x && cy === y) return true;
+        }
+      }
+
+      // ===== 斜め系（B,Q） =====
+      if (type === "B" || type === "Q") {
+        if (Math.abs(xx - x) === Math.abs(yy - y)) {
+          const dx = Math.sign(x - xx);
+          const dy = Math.sign(y - yy);
+          let cx = xx + dx;
+          let cy = yy + dy;
+
+          while (cx !== x || cy !== y) {
+            if (board[cy][cx]) break;
+            cx += dx;
+            cy += dy;
+          }
+
+          if (cx === x && cy === y) return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+
+function deepEvaluate(board, state) {
+  let best = -Infinity;
+  let count = 0;
+
+  for (let y = 0; y < 8; y++) {
+    for (let x = 0; x < 8; x++) {
+      const p = board[y][x];
+      if (p && p[0] === "b") {
+
+        const moves = getLegalMoves(x, y, board, state.enPassant);
+
+        for (const m of moves) {
+          const sim = simulateMove(board, x, y, m.x, m.y, state);
+          const score = evaluateBoard(sim.board);
+
+          if (score > best) best = score;
+
+          count++;
+          if (count > 20) return best; // ← 制限
+        }
+      }
+    }
+  }
+
+  return best;
+}
+
+function simulateMove(b, sx, sy, tx, ty, state) {
+  const copy = b.map(r => r.slice());
+  const piece = copy[sy][sx];
+
+  let newEnPassant = null;
+  const prevEP = state.enPassant;
+
+  // ===== アンパッサン捕獲 =====
+  if (
+    piece[1] === "P" &&
+    prevEP &&
+    prevEP.color !== piece[0] &&
+    Math.abs(tx - sx) === 1 &&
+    tx === prevEP.x &&
+    ty === prevEP.y
+  ) {
+    const dir = piece[0] === "w" ? 1 : -1;
+    copy[ty + dir][tx] = "";
+  }
+
+  // ===== キャスリング =====
+  if (piece[1] === "K" && Math.abs(tx - sx) === 2) {
+    const row = sy;
+
+    if (tx > sx) {
+      copy[row][5] = copy[row][7];
+      copy[row][7] = "";
+    } else {
+      copy[row][3] = copy[row][0];
+      copy[row][0] = "";
+    }
+  }
+
+  // ===== 通常移動 =====
+  copy[ty][tx] = piece;
+  copy[sy][sx] = "";
+
+  // ===== アンパッサン記録 =====
+  if (piece[1] === "P" && Math.abs(ty - sy) === 2) {
+    newEnPassant = {
+      x: tx,
+      y: (ty + sy) / 2,
+      color: piece[0]
+    };
+  }
+
+  // ===== 昇格 =====
+  if (piece[1] === "P" && (ty === 0 || ty === 7)) {
+    copy[ty][tx] = piece[0] + "Q";
+  }
+
+  return {
+    board: copy,
+    state: {
+      enPassant: newEnPassant
+    }
+  };
+}
+
+// ===== 履歴 =====
+let history = [];
+
+function getBoardHash(board) {
+  return board.flat().join("");
+}
+
+function findKing(board, color) {
+  for (let y = 0; y < 8; y++) {
+    for (let x = 0; x < 8; x++) {
+      const p = board[y][x];
+      if (p === color + "K") {
+        return { x, y };
+      }
+    }
+  }
+  return null;
+}
+
+function isCheckmate(board, color, state, limit = 30) {
+  let count = 0;
+
+  const kingPos = findKing(board, color);
+  if (!kingPos) return true;
+
+  if (!isSquareAttacked(board, kingPos.x, kingPos.y, color === "w" ? "b" : "w", state.enPassant)) {
+    return false;
+  }
+
+  for (let y = 0; y < 8; y++) {
+    for (let x = 0; x < 8; x++) {
+      const p = board[y][x];
+      if (!p || p[0] !== color) continue;
+
+      const moves = getLegalMoves(x, y, board, state.enPassant);
+
+      for (const m of moves) {
+        const sim = simulateMove(board, x, y, m.x, m.y, state);
+        const newKingPos = findKing(sim.board, color);
+
+        if (
+          newKingPos &&
+          !isSquareAttacked(
+            sim.board,
+            newKingPos.x,
+            newKingPos.y,
+            color === "w" ? "b" : "w",
+            sim.state.enPassant
+          )
+        ) {
+          return false;
+        }
+
+        count++;
+        if (count > limit) return false; // ← 打ち切り
+      }
+    }
+  }
+
+  return true;
+}
+
+function kingMobility(board, color, state) {
+  const k = findKing(board, color);
+  if (!k) return 0;
+
+  const moves = getLegalMoves(k.x, k.y, board, state.enPassant);
+  return moves.length;
+}
+
+function isKingCaptured(board, color) {
+  return !board.flat().some(p => p === color + "K");
+}
+
+// ===== AI本体 =====
+
+function makeAIMove() {
+  if (makeBlackOpeningMove()) return;
+
+  let bestScore = -Infinity;
+  let bestMove = null;
+
+  const useDeep = Math.random() < 0.2;
+  const makeMistake = Math.random() < 0.15;
+
+  const positions = [];
+  for (let y = 0; y < 8; y++) {
+    for (let x = 0; x < 8; x++) {
+      positions.push({ x, y });
+    }
+  }
+
+  const shuffled = [...positions].sort(() => Math.random() - 0.5);
+
+  outerLoop:
+  for (const pos of shuffled) {
+    const x = pos.x;
+    const y = pos.y;
+    const p = board[y][x];
+    if (!p || p[0] !== "b") continue;
+
+    let moves = getLegalMoves(x, y, board, enPassant);
+    moves = [...moves].sort(() => Math.random() - 0.5);
+
+    for (const m of moves) {
+      const sim = simulateMove(board, x, y, m.x, m.y, { enPassant });
+
+      const kingPos = findKing(sim.board, "w");
+
+      const isCheck =
+        kingPos &&
+        isSquareAttacked(
+          sim.board,
+          kingPos.x,
+          kingPos.y,
+          "b",
+          sim.state.enPassant
+        );
+
+      // ===== 詰み最優先 =====
+      if (isCheck && isCheckmate(sim.board, "w", sim.state)) {
+        bestMove = { sx: x, sy: y, tx: m.x, ty: m.y };
+        bestScore = 10000;
+        break outerLoop;
+      }
+
+      if (isKingCaptured(sim.board, "w")) {
+        bestMove = { sx: x, sy: y, tx: m.x, ty: m.y };
+        bestScore = 9999;
+        break outerLoop;
+      }
+
+      let movePenalty = 0;
+
+      // ===== 取られるリスク =====
+      if (isSquareAttacked(sim.board, m.x, m.y, "w", sim.state.enPassant)) {
+        movePenalty -= pieceValue[p[1]] * (makeMistake ? 0.3 : 0.7);
+      }
+
+      // ===== チェック（弱め） =====
+      if (isCheck) {
+        const hash = getBoardHash(sim.board);
+
+        if (history.includes(hash)) {
+          movePenalty -= 1.5; // ループ系チェック防止
+        } else {
+          movePenalty += 0.2;
+        }
+      }
+
+      // ===== 同じ駒連続抑制 =====
+      if (p === lastMovedPiece) {
+        movePenalty -= 0.3;
+      }
+
+      // ===== キング距離 =====
+      if (kingPos) {
+        const dist =
+          Math.abs(kingPos.x - m.x) + Math.abs(kingPos.y - m.y);
+        movePenalty += (6 - dist) * 0.05;
+      }
+
+      // ===== 王の可動域（←追加したやつ） =====
+      const mobility = kingMobility(sim.board, "w", sim.state);
+      movePenalty += (8 - mobility) * 0.15;
+
+      // ===== 履歴ペナルティ =====
+      const hash = getBoardHash(sim.board);
+      if (history.includes(hash)) {
+        movePenalty -= 1.2;
+      }
+
+      let worstScore = Infinity;
+
+      for (let yy = 0; yy < 8; yy++) {
+        for (let xx = 0; xx < 8; xx++) {
+          const op = sim.board[yy][xx];
+          if (!op || op[0] !== "w") continue;
+
+          const opMoves = getLegalMoves(xx, yy, sim.board, sim.state.enPassant);
+
+          for (const om of opMoves) {
+            const sim2 = simulateMove(sim.board, xx, yy, om.x, om.y, sim.state);
+
+            const opKing = findKing(sim2.board, "b");
+            const isMyCheck =
+              opKing &&
+              isSquareAttacked(
+                sim2.board,
+                opKing.x,
+                opKing.y,
+                "w",
+                sim2.state.enPassant
+              );
+
+            const score =
+              (useDeep || isMyCheck)
+                ? deepEvaluate(sim2.board, sim2.state)
+                : evaluateBoard(sim2.board);
+
+            if (score < worstScore) worstScore = score;
+          }
+        }
+      }
+
+      if (worstScore === Infinity) {
+        worstScore = evaluateBoard(sim.board);
+      }
+
+      let finalScore =
+        worstScore + movePenalty + Math.random() * 0.1;
+
+      if (makeMistake) {
+        finalScore += (Math.random() - 0.5) * 1.5;
+      }
+
+      if (
+        finalScore > bestScore ||
+        (Math.abs(finalScore - bestScore) < 0.01 && Math.random() < 0.4)
+      ) {
+        bestScore = finalScore;
+        bestMove = { sx: x, sy: y, tx: m.x, ty: m.y };
+      }
+    }
+  }
+
+  if (!bestMove) {
+    console.log("AI: no legal moves");
+    return;
+  }
+
+  const movedPiece = board[bestMove.sy][bestMove.sx];
+
+  clickCell(bestMove.sx, bestMove.sy);
+  clickCell(bestMove.tx, bestMove.ty);
+
+  lastMovedPiece = movedPiece;
+
+  history.push(getBoardHash(board));
+  if (history.length > 50) history.shift();
 }
 
 
 
+// 初期化処理の最後
 
 drawBoard();
-
 updateHint();
 
 </script>
-</body>
+
 </html>
